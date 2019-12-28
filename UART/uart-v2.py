@@ -3,7 +3,7 @@
 #   Requisite   :   keyboard
 #                   prettytable
 #
-#   unsolved    :   can not enter write function well
+#
 ###############################################################################
 
 import serial
@@ -16,21 +16,28 @@ from prettytable import PrettyTable
 from argparse import ArgumentParser
 
 
-def bytes_to_int(recv_data):
-    int_num =   int.from_bytes(recv_data, byteorder='big', signed=False)
-    return int_num
+###############################################################################
+#   cmd parameters :
+###############################################################################
 
 parser = ArgumentParser(description='Set some parameters or use default setting .')
 parser.add_argument("--port", help="set the COM port,\
      default is COM8 .", type = str)
 parser.add_argument("--sleep", help="set the sleep time every loop,\
-     default is 1 .", type = float)   
+     default is 1.0 .", type = float)   
+parser.add_argument("--timeout", help="set the timeout of read function,\
+     default is 1.0 .", type = float)   
 args = parser.parse_args()
 
 if args.port:
     port    =   args.port
 else:
     port    =   'COM8'
+
+if args.timeout:
+    user_timeout    =   args.timeout
+else:
+    user_timeout    =   None
 
 if args.sleep:
     sleep_time    =   args.sleep
@@ -45,14 +52,17 @@ else:
 #     for i in range(0,len(port_list)):
 #         print(port_list[i]) 
 
+###############################################################################
+#   Static Parameters :
+###############################################################################
+
 READ    =   ( 0b0 << 7 )
 WRITE   =   ( 0b1 << 7 )
 
-
-baudrate    =   9600
-timeout     =   None    # None:wait forever; 0:do not wait; n:timeout is n second
-READ_SIZE   =   4       # read up to 4 bytes
-WRITE_SIZE  =   1       # write data is 8 bit, 1 byte 
+baudrate        =   9600
+user_timeout    =   1    # None:wait forever; 0:do not wait; n:timeout is n second
+READ_SIZE       =   4       # read up to 4 bytes
+WRITE_SIZE      =   1       # write data is 8 bit, 1 byte 
 
 #   R
 Time            =   0x00
@@ -84,7 +94,6 @@ Clr_err_dff     =   0x19
 Reset_ser       =   0x1A
 Reset_sram      =   0x1B
 
-
 read_reg        =   [0 for _ in range(18)]
 read_reg[0]     =   Time
 read_reg[1]     =   Err_sram
@@ -105,33 +114,58 @@ read_reg[15]    =   Err_linkrecvy1
 read_reg[16]    =   Err_cpu
 read_reg[17]    =   Reset_ALL
 
-tb1 = PrettyTable()
-tb1.field_names = ["Time","Err_sram","Err_pllser","Err_pllsys","Err_plleth",\
-    "Err_pll1","Err_pll2","Err_pllcas","Err_dff"]
 
-tb2 = PrettyTable()
-tb2.field_names = ["Err_dffinv","Err_lane0","Err_lane1","Err_linkdown0",\
+###############################################################################
+#   File and Print related :
+###############################################################################
+# filename    =   time.strftime("%Y.%m.%d-%H.%M.%S") + '--' + 'log'
+# f_uart      =   open( 'Uart-' + filename + ".txt ", mode = "w")
+
+row_reg1    =   ["reg","Time","Err_sram","Err_pllser","Err_pllsys","Err_plleth",\
+    "Err_pll1","Err_pll2","Err_pllcas","Err_dff"]
+row_reg2    =   ["reg","Err_dffinv","Err_lane0","Err_lane1","Err_linkdown0",\
     "Err_linkdown1","Err_linkrecvy0","Err_linkrecvy1","Err_cpu","Reset_ALL"]
+data = ["data"]
+
 
 ###############################################################################
 #   Define functions :
 ###############################################################################
 
+def bytes_to_int(recv_data):    # helper function
+    int_num =   int.from_bytes(recv_data, byteorder='big', signed=False)
+    return int_num
+
 def user_read( addr ):
     read_signal         =   ( READ | addr )
     read_signal_byte    =   read_signal.to_bytes( 1, "big", signed=False )
-    byte_width          =   ser.write( read_signal_byte )
-    data_byte           =   ser.read( READ_SIZE )
-    data_int            =   bytes_to_int(data_byte)
+    
+    # fixme: what if after write, the connection shut down and resume again?
+    flag_recv           =   0
+    while(flag_recv==0):
+        try:
+            write_byte_width    =   ser.write( read_signal_byte )
+            read_data           =   ser.read( READ_SIZE )
+
+            # assert  write_byte_width    ==  1
+            assert  len(read_data)      ==  4
+            # assert  read_data  == 1
+            flag_recv = 1
+
+        except AssertionError:
+            print('Something wrong during the read function of : %d. '%addr)
+            print('Maybe timeout of read . ')
+            time.sleep(1)
+        except serial.SerialTimeoutException:
+            time.sleep(1)
+        except :
+            print('Unpredictable exception occurs in the user_read function !! ')
+            time.sleep(1)
+
+    data_int            =   bytes_to_int(read_data)
     # print( data_read )
     # print( struct.unpack( str(len(data_read)) + "s", data_read) )
 
-    try:
-        assert  byte_width == 1
-    except:
-        print('Something wrong during the read function . ')
-        return 0 
-    
     return data_int
 
 def user_write():
@@ -143,9 +177,9 @@ def user_write():
 def write_info():
     global write_occur
     write_occur =   1
-    print('please input 1 and another 7 bit address : ',end='')
+    print('please input 1 and another 7 bit address, then press ENTER : ',end='')
     addr_info_str   =   input()
-    print('please input another 8 bit data : ',end='')
+    print('please input 8 bit data, then press ENTER : ',end='')
     data_info_str   =   input()
 
     try:
@@ -166,6 +200,7 @@ def write_info():
     print('Address information has been sended ! ')
     ser.write(data_info_byte)
     print('Data information has been sended ! ')
+    write_occur =   0
     
 # exception serial.SerialException
 # exception serial.SerialTimeoutException
@@ -178,15 +213,16 @@ def write_info():
 if __name__=='__main__':
     global write_occur
 
+    filename    =   time.strftime("%Y.%m.%d-%H.%M.%S") + '--' + 'log'
+    f_uart      =   open( 'Uart-' + filename + ".txt ", mode = "w")
+
     try:
-        ser = serial.Serial( port, baudrate, timeout=timeout ) 
+        ser = serial.Serial( port, baudrate, timeout=user_timeout ) 
         ser.bytesize    =   8
         ser.open()
         print('COM is open .')
     except serial.SerialException:
         print('Can not found device, raise SerialException .')
-    except:
-        print('error')
 
     # try:
     #     ser.is_open() == True
@@ -198,41 +234,34 @@ if __name__=='__main__':
     t_write.start()
 
     try:
+        write_occur =    0
         while(True):
-            write_occur =    0
-            
+                        
             if( write_occur == 0 ):
                 print('read loop')
                 # entering read loop
-
-                data_tmp = []
+                data_tmp        =   []
+                tb              =   PrettyTable()
+                # fixme: time do not change
+                tb.field_names  =   ["Time",":",time.strftime("%Y-%m-%d"),time.strftime("%A"),\
+                    time.strftime("%H:%M:%S"),time.strftime("%p"),' ','--','-','.']
+                
                 for reg in read_reg:
                     data_tmp.append( user_read( reg ) )
                     print('Read %d reg done . '%reg)
 
-                # read_signal         =   ( READ | Err_sram )
-                # read_signal_byte    =   read_signal.to_bytes( 1, "big", signed=False )
-                # print('waiting to send...')
-                # byte_width          =   ser.write( read_signal_byte )
-                # print('waiting to read...')
-                # data_read           =   ser.read( READ_SIZE )
-                # int_recv            =   bytes_to_int(data_read)
-                # bin_recv            =   bin(int_recv)
+                tb.add_row(row_reg1)
+                row_data1    =   data + data_tmp[0:9]
+                tb.add_row(row_data1)
+                tb.add_row(row_reg2)
+                row_data2    =   data + data_tmp[9:18]
+                tb.add_row(row_data2)
 
-                # while ( len(bin_recv) < 32 ):
-                #     list_b          =   list(bin_recv)
-                #     list_b.insert(2,'0')
-                #     bin_recv        =   ''.join(list_g)
-
-                # print(bin_recv)
-                # print('read TIME register finish . ')
-
-                row1    =   data_tmp[0:9]
-                row2    =   data_tmp[9:18]
-                tb1.add_row(row1)
-                tb2.add_row(row2)
-                print(tb1)
-                print(tb2)
+                data_tmp.clear()
+                print(tb)
+                f_uart.write(str(tb))
+                f_uart.write('\n\n')
+                tb.clear()
 
                 time.sleep( sleep_time )
 
@@ -242,9 +271,14 @@ if __name__=='__main__':
 
     except KeyboardInterrupt:
         print('Interruption Ctrl+C in main thread, ready to exit . ')
-
+        f_uart.close()
+    except serial.SerialException:
+        print('The link down during the loop! ')
+    except serial.SerialTimeoutException:
+        print('Exception of Timeout .')
     except :
-        print('Unpredictable exception occurs !! ')
+        print('Unexpectable error happened !')
+        f_uart.close()
         
-
+    f_uart.close()
     ser.close()
