@@ -7,7 +7,7 @@ import keyboard
 port    =   '/dev/ttyUSB0'
 
 if __name__=='__main__':
-   while True:
+    while True:
 
         try:
             ser = serial.Serial( port, 9600, timeout=1 ) 
