@@ -7,7 +7,6 @@
 #                   0x input write                              done~
 ###############################################################################
 import socket
-
 import serial
 import time
 import struct
@@ -38,7 +37,7 @@ args = parser.parse_args()
 if args.port:
     port    =   args.port
 else:
-    port    =   'COM8'
+    port    =   '/dev/ttyUSB0'
 
 # None:wait forever; 0:do not wait; n:timeout is n second
 if args.timeout:
@@ -120,7 +119,10 @@ read_reg[15]    =   Err_linkrecvy1
 read_reg[16]    =   Err_cpu
 read_reg[17]    =   Reset_ALL
 
-
+client_uart1 = socket.socket()         # 创建 socket 对象
+host = socket.gethostname()         # 获取本地主机名
+user_port = 4877                         # 设置端口
+WARNING_ResetAll    =   b'\xa0'
 ###############################################################################
 #   File and Print related :
 ###############################################################################
@@ -229,6 +231,32 @@ def write_info():
 #   MAIN
 ###############################################################################
 
+
+link_down_count =   1
+sock_flag       =   1
+while(True):
+    try: 
+        assert (link_down_count < 5)
+        client_uart1.connect((host, user_port))        # 连接端口
+        link_down_count = 1
+        break
+    except OSError:
+        print('Can not link socket server in %d times. Reconnect ...'%link_down_count)
+        link_down_count += 1
+        time.sleep(1)
+    except AssertionError:
+        print('Can not link socket server in 10 second.')
+        xx = input('Press "e" to exit, "r" to retry, or other key to ignore and continue ... :')
+        if( xx == 'e'):
+            sock_flag   =   0
+            exit()
+        elif( xx == 'r'):
+            link_down_count = 1
+            continue
+        else:
+            sock_flag   =   0
+            break
+
 if __name__=='__main__':
     global write_occur
 
@@ -242,12 +270,6 @@ if __name__=='__main__':
         print('COM is open .')
     except serial.SerialException:
         print('Can not found device, raise SerialException .')
-
-    # try:
-    #     ser.is_open() == True
-    # except:
-    #     print('Serial Port is not open, exit ! ')
-    #     exit()
 
     t_write = threading.Thread( target = user_write, daemon = True)
     t_write.start()
@@ -274,6 +296,23 @@ if __name__=='__main__':
                         reg_name = hex(reg)
                     print('Read %s reg done . '%reg_name )
 
+                if ( sock_flag & (data_tmp[-1] == 1) ):
+                    try:
+                        warn_info = WARNING_ResetAll
+                        print("Ready to send UART1 warning...")
+                        client_uart1.send(warn_info)
+                    except OSError:
+                        print('Can not link socket server.')
+                        sock_flag = 0
+                        client_uart1.close()
+                    except KeyboardInterrupt:
+                        print('User have press Ctrl+C during uart1 loop .')
+                        client_uart1.close()
+                        f_uart.close()
+                        ser.close()
+                        exit()
+
+
                 tb.add_row(row_reg1)
                 row_data1    =    data_tmp[0:6]
                 tb.add_row(row_data1)
@@ -283,16 +322,8 @@ if __name__=='__main__':
                 tb.add_row(row_data2)
 
                 print(tb)
-                # f_uart.write(str(tb))
-                # f_uart.write('\n\n')
 
                 writer.writerow( [round(time.time(),4),time.strftime("%H:%M:%S")] + data_tmp )
-
-                # fixme: warning check
-                # if(data_tmp[-1] == 1):
-                #     tkinter.messagebox.showwarning('warning','Reset All = 1')
-                # else:
-                #     pass
 
                 data_tmp.clear()
                 tb.clear()
@@ -300,12 +331,16 @@ if __name__=='__main__':
                 time.sleep( sleep_time )
 
             else:
-                # entering write loop
                 time.sleep( sleep_time )
 
     except KeyboardInterrupt:
         print('Interruption Ctrl+C in main thread, ready to exit . ')
         f_uart.close()
+        ser.close()
+        if sock_flag:
+            client_uart1.close()
+        else:
+            pass
     except serial.SerialException:
         print('The link down during the loop! ')
     except serial.SerialTimeoutException:
@@ -313,6 +348,15 @@ if __name__=='__main__':
     except :
         print('Unexpectable error happened ! ')
         f_uart.close()
+        ser.close()
+        if sock_flag:
+            client_uart1.close()
+        else:
+            pass
         
     f_uart.close()
     ser.close()
+    if sock_flag:
+        client_uart1.close()
+    else:
+        pass
